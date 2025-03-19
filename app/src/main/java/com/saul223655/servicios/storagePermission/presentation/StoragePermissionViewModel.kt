@@ -10,11 +10,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
-import com.saul223655.servicios.storagePermission.data.datasource.SongFile
 import com.saul223655.servicios.music.presentation.MusicViewModel
+import com.saul223655.servicios.storagePermission.data.datasource.SongFile
 import kotlinx.coroutines.launch
 
- class StoragePermissionViewModel(
+class StoragePermissionViewModel(
     application: Application,
     private val musicViewModel: MusicViewModel
 ) : AndroidViewModel(application) {
@@ -85,9 +85,20 @@ import kotlinx.coroutines.launch
                 val id = cursor.getLong(idColumn)
                 val title = cursor.getString(titleColumn)
                 val path = cursor.getString(dataColumn)
-                audioFiles.add(SongFile(id, title, path))
+
+                if (path != null && isSupportedAudioFormat(path)) {
+                    audioFiles.add(SongFile(id, title, path))
+                    Log.d(TAG, "getAudioFilesFromStorage: Encontrado - ID: $id, Título: $title, Path: $path")
+                } else {
+                    Log.w(TAG, "getAudioFilesFromStorage: Archivo no soportado - Título: $title, Path: $path")
+                }
             }
         }
         return audioFiles
+    }
+
+    private fun isSupportedAudioFormat(path: String): Boolean {
+        val supportedFormats = listOf(".mp3", ".wav", ".m4a", ".aac")
+        return supportedFormats.any { path.lowercase().endsWith(it) }
     }
 }

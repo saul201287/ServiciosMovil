@@ -81,12 +81,31 @@ class MusicViewModel(
                 playMusicUseCase(song.title, getApplication())
                 getApplication<Application>().startService(Intent(getApplication(), MusicService::class.java).apply {
                     putExtra("ACTION", "PLAY")
+                    putExtra("TITLE", song.title)
                     putExtra("PATH", song.path)
                 })
                 _isPlaying.value = true
                 loadHistory()
             } catch (e: Exception) {
                 Log.e(TAG, "playMusic: Error al reproducir: ${e.message}")
+            }
+        }
+    }
+
+    fun playDefaultAudio() {
+        Log.d(TAG, "playDefaultAudio: Reproduciendo audio por defecto")
+        viewModelScope.launch {
+            try {
+                playMusicUseCase("Default Audio", getApplication())
+                getApplication<Application>().startService(Intent(getApplication(), MusicService::class.java).apply {
+                    putExtra("ACTION", "PLAY")
+                    putExtra("TITLE", "Default Audio")
+                    // No pasamos PATH para que use R.raw.audio_sample
+                })
+                _isPlaying.value = true
+                loadHistory()
+            } catch (e: Exception) {
+                Log.e(TAG, "playDefaultAudio: Error al reproducir: ${e.message}")
             }
         }
     }

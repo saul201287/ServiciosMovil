@@ -3,20 +3,23 @@ package com.saul223655.servicios.music.domain.services
 import android.annotation.SuppressLint
 import android.app.*
 import android.content.Intent
-import android.media.MediaPlayer
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import com.saul223655.servicios.MainActivity
 import com.saul223655.servicios.R
 import com.saul223655.servicios.core.database.AppDatabase
 
 class MusicService : Service() {
     private val binder = MusicBinder()
-    private lateinit var mediaPlayer: MediaPlayer
+    private lateinit var player: Player
     var isPlaying = false
     private lateinit var db: AppDatabase
+    private var isDefaultAudioPrepared = false
 
     companion object {
         private const val TAG = "MusicService"
@@ -30,18 +33,22 @@ class MusicService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "onCreate: Inicializando MediaPlayer y Room")
+        Log.d(TAG, "onCreate: Inicializando ExoPlayer y Room")
         try {
-            mediaPlayer = MediaPlayer.create(this, R.raw.audio_sample)
-            if (mediaPlayer == null) {
-                Log.e(TAG, "onCreate: Error al crear MediaPlayer, es null")
-            } else {
-                Log.d(TAG, "onCreate: MediaPlayer creado exitosamente")
-            }
-            mediaPlayer.setOnCompletionListener {
-                Log.d(TAG, "MediaPlayer: Reproducción completada, llamando a stop()")
-                stop()
-            }
+            player = ExoPlayer.Builder(this).build()
+            val defaultMediaItem = MediaItem.fromUri("android.resource://${packageName}/${R.raw.audio_sample}")
+            player.setMediaItem(defaultMediaItem)
+            player.prepare()
+            isDefaultAudioPrepared = true
+            Log.d(TAG, "onCreate: ExoPlayer creado exitosamente con R.raw.audio_sample")
+            player.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_ENDED) {
+                        Log.d(TAG, "ExoPlayer: Reproducción completada, llamando a stop()")
+                        stop()
+                    }
+                }
+            })
             db = AppDatabase.getDatabase(this)
             Log.d(TAG, "onCreate: Base de datos Room inicializada")
         } catch (e: Exception) {
@@ -55,112 +62,105 @@ class MusicService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand: Intent recibido con acción: ${intent?.getStringExtra("ACTION")}")
+        Log.d(TAG, "onStartCommand: Intent recibido - Acción: ${intent?.getStringExtra("ACTION")}")
         val action = intent?.getStringExtra("ACTION")
         val title = intent?.getStringExtra("TITLE") ?: "Unknown Song"
+        val path = intent?.getStringExtra("PATH")
+        Log.d(TAG, "onStartCommand: Título: $title, Path: $path")
 
         when (action) {
-            "PLAY" -> play(title)
+            "PLAY" -> play(title, path)
             "PAUSE" -> pause()
             "STOP" -> stop()
-            else -> Log.w(TAG, "onStartCommand: Acción desconocida: $action")
         }
         return START_STICKY
     }
 
     @SuppressLint("ForegroundServiceType")
-    private fun play(title: String) {
-        Log.d(TAG, "play: Intentando reproducir canción: $title")
-        if (!mediaPlayer.isPlaying) {
+    private fun play(title: String, path: String?) {
+        Log.d(TAG, "play: Reproduciendo $title desde $path")
+        if (!player.isPlaying) {
             try {
-                mediaPlayer.start()
-                isPlaying = true
-                Log.d(TAG, "play: Reproducción iniciada")
-                val notification = createNotification("Reproduciendo: $title")
-                startForeground(NOTIFICATION_ID, notification)
-                Log.d(TAG, "play: Servicio foreground iniciado con notificación")
+                if (path != null) {
+                    Log.d(TAG, "play: Configurando ExoPlayer con path: $path")
+                    player.stop()
+                    player.clearMediaItems()
+                    val mediaItem = MediaItem.fromUri(path)
+                    player.setMediaItem(mediaItem)
+                    player.prepare()
+                    player.play()
+                    isPlaying = true
+                    isDefaultAudioPrepared = false
+                    startForeground(NOTIFICATION_ID, createNotification("Reproduciendo: $title"))
+                    Log.d(TAG, "play: Reproducción iniciada desde almacenamiento")
+                } else if (isDefaultAudioPrepared) {
+                    Log.d(TAG, "play: Reproduciendo audio por defecto (R.raw.audio_sample)")
+                    player.play()
+                    isPlaying = true
+                    startForeground(NOTIFICATION_ID, createNotification("Reproduciendo: $title"))
+                    Log.d(TAG, "play: Reproducción iniciada desde R.raw.audio_sample")
+                } else {
+                    Log.w(TAG, "play: Audio por defecto no preparado, intentando recrear")
+                    player.clearMediaItems()
+                    val defaultMediaItem = MediaItem.fromUri("android.resource://${packageName}/${R.raw.audio_sample}")
+                    player.setMediaItem(defaultMediaItem)
+                    player.prepare()
+                    player.play()
+                    isPlaying = true
+                    isDefaultAudioPrepared = true
+                    startForeground(NOTIFICATION_ID, createNotification("Reproduciendo: $title"))
+                    Log.d(TAG, "play: Reproducción iniciada desde R.raw.audio_sample (recreado)")
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "play: Error al iniciar reproducción: ${e.message}")
+                Log.e(TAG, "play: Error al reproducir: ${e.message}")
+                isPlaying = false
+                stopForeground(STOP_FOREGROUND_REMOVE)
             }
-        } else {
-            Log.w(TAG, "play: MediaPlayer ya está reproduciendo")
         }
     }
 
     @SuppressLint("ForegroundServiceType")
     private fun pause() {
-        Log.d(TAG, "pause: Intentando pausar reproducción")
-        if (mediaPlayer.isPlaying) {
-            try {
-                mediaPlayer.pause()
-                isPlaying = false
-                Log.d(TAG, "pause: Reproducción pausada")
-                val notification = createNotification("En pausa")
-                startForeground(NOTIFICATION_ID, notification)
-                Log.d(TAG, "pause: Notificación actualizada a 'En pausa'")
-            } catch (e: Exception) {
-                Log.e(TAG, "pause: Error al pausar: ${e.message}")
-            }
-        } else {
-            Log.w(TAG, "pause: MediaPlayer no está reproduciendo")
+        if (player.isPlaying) {
+            player.pause()
+            isPlaying = false
+            startForeground(NOTIFICATION_ID, createNotification("En pausa"))
         }
     }
 
     private fun stop() {
-        Log.d(TAG, "stop: Intentando detener reproducción")
-        if (mediaPlayer.isPlaying) {
-            try {
-                mediaPlayer.stop()
-                mediaPlayer.prepare()
-                Log.d(TAG, "stop: Reproducción detenida y MediaPlayer preparado")
-            } catch (e: Exception) {
-                Log.e(TAG, "stop: Error al detener y preparar: ${e.message}")
-            }
+        if (player.isPlaying) {
+            player.stop()
         }
+        player.clearMediaItems()
         isPlaying = false
+        isDefaultAudioPrepared = false
         stopForeground(STOP_FOREGROUND_REMOVE)
-        Log.d(TAG, "stop: Servicio foreground detenido")
         stopSelf()
-        Log.d(TAG, "stop: Servicio detenido completamente")
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "onDestroy: Liberando recursos")
-        try {
-            mediaPlayer.release()
-            Log.d(TAG, "onDestroy: MediaPlayer liberado")
-        } catch (e: Exception) {
-            Log.e(TAG, "onDestroy: Error al liberar MediaPlayer: ${e.message}")
-        }
+        player.release()
         super.onDestroy()
     }
 
     private fun createNotification(status: String): Notification {
-        Log.d(TAG, "createNotification: Creando notificación con estado: $status")
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
 
-        return try {
-            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
-                .setContentTitle("Music Player")
-                .setContentText(status)
-                .setContentIntent(pendingIntent)
-                .setOngoing(true)
-                .addAction(R.drawable.ic_play, "Play", createActionIntent("PLAY"))
-                .addAction(R.drawable.ic_pause, "Pause", createActionIntent("PAUSE"))
-                .addAction(R.drawable.ic_stop, "Stop", createActionIntent("STOP"))
-                .build()
-            Log.d(TAG, "createNotification: Notificación creada exitosamente")
-            notification
-        } catch (e: Exception) {
-            Log.e(TAG, "createNotification: Error al crear notificación: ${e.message}")
-            throw e
-        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Music Player")
+            .setContentText(status)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .addAction(R.drawable.ic_play, "Play", createActionIntent("PLAY"))
+            .addAction(R.drawable.ic_pause, "Pause", createActionIntent("PAUSE"))
+            .addAction(R.drawable.ic_stop, "Stop", createActionIntent("STOP"))
+            .build()
     }
 
     private fun createActionIntent(action: String): PendingIntent {
-        Log.d(TAG, "createActionIntent: Creando PendingIntent para acción: $action")
         val intent = Intent(this, MusicService::class.java).apply { putExtra("ACTION", action) }
         return PendingIntent.getService(this, action.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
