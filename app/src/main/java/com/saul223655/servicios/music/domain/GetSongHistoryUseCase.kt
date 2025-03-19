@@ -8,7 +8,7 @@ class GetSongHistoryUseCase(application: Application) {
 
     suspend operator fun invoke(): Result<List<String>> {
         return try {
-            val history = songDao.getAllSongs().map { it.title }
+            val history = songDao.getHistory().map { it.title }
             Result.success(history)
         } catch (e: Exception) {
             Result.failure(e)
